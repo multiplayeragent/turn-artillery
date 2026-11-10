@@ -1,0 +1,778 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Turn Artillery</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #2a4f86; }
+  body { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; cursor: crosshair; }
+  .hud { position: fixed; pointer-events: none; text-shadow: 0 1px 3px #0009; }
+  #cards { top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); display: flex; flex-direction: column; gap: 6px; }
+  .tc { width: 132px; padding: 4px 8px 6px; border-radius: 10px; background: #0005; border-left: 4px solid var(--c); font-size: 12px; font-weight: 700; }
+  .tc.now { background: #0009; box-shadow: 0 0 0 2px var(--c); }
+  .tc.dead { opacity: .4; } .tc.me span { color: #ffd166; }
+  .tc i { display: block; height: 6px; margin-top: 3px; border-radius: 3px; background: #0006; overflow: hidden; }
+  .tc i b { display: block; height: 100%; background: var(--c); transition: width .4s; }
+  #turn { top: max(10px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); text-align: center; font: 800 20px/1.2 system-ui, sans-serif; white-space: nowrap; }
+  #turn small { display: block; font-size: 13px; font-weight: 700; opacity: .9; }
+  #msg { top: 30%; left: 0; right: 0; text-align: center; font: 900 46px/1.1 system-ui, sans-serif; color: #ffd166; -webkit-text-stroke: 2px #4a2a00; }
+  #msg small { display: block; margin-top: 8px; font-size: 17px; color: #fff; -webkit-text-stroke: 0; }
+  #hint { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 30px); left: 0; right: 0; padding: 0 16px; text-align: center; font-size: 14px; }
+  #net { bottom: max(8px, env(safe-area-inset-bottom)); left: 0; right: 0; text-align: center; font-size: 12px; opacity: .8; }
+  #over { position: fixed; inset: 0; display: grid; place-items: center; background: #102040a8; }
+  #over[hidden], .drive[hidden] { display: none; }
+  .card { width: min(360px, 90vw); max-height: 86vh; overflow: auto; padding: 20px; border-radius: 16px; background: #1d3358; border: 1px solid #ffffff2e; text-align: center; }
+  .card h2 { margin: 0 0 4px; font-size: 28px; color: #ffd166; } .card h3 { margin: 14px 0 4px; font-size: 13px; color: #8fd3ff; text-align: left; }
+  .card ol { margin: 0; padding-left: 24px; font-size: 14px; text-align: left; }
+  .card li span { float: right; font-variant-numeric: tabular-nums; } .card li.me { color: #ffd166; font-weight: 700; }
+  .card p { margin: 10px 0 0; font-size: 13px; opacity: .75; }
+  button.go { width: 100%; min-height: 48px; margin-top: 16px; border: 0; border-radius: 12px; background: #ffd166; color: #3a2400; font: 800 17px system-ui, sans-serif; cursor: pointer; }
+  .drive { position: fixed; bottom: calc(max(14px, env(safe-area-inset-bottom)) + 22px); width: 64px; height: 64px; border-radius: 16px; border: 2px solid #ffffff88; background: #00000040; color: #fff; font: 800 22px system-ui, sans-serif; touch-action: none; }
+  .drive.on { background: #ffffff55; }
+  #left { left: max(12px, env(safe-area-inset-left)); } #right { left: calc(max(12px, env(safe-area-inset-left)) + 76px); }
+  @media (pointer: coarse) { #hint { bottom: calc(max(14px, env(safe-area-inset-bottom)) + 100px); } }
+  @media (max-width: 640px) { #turn { top: calc(max(10px, env(safe-area-inset-top)) + 4px); left: auto; right: 10px; transform: none; text-align: right; font-size: 16px; } .tc { width: 110px; } #msg { font-size: 34px; } }
+</style>
+<script src="https://cdn.multiplayeragent.com/sdk/mp.global.js"></script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div class="hud" id="cards"></div>
+<div class="hud" id="turn"></div>
+<div class="hud" id="msg"></div>
+<div class="hud" id="hint"></div>
+<div class="hud" id="net">Connecting…</div>
+<button class="drive" id="left" hidden>◀</button><button class="drive" id="right" hidden>▶</button>
+<div id="over" hidden><div class="card">
+  <h2 id="overTitle"></h2><div id="overSub"></div>
+  <h3>This match</h3><ol id="results"></ol>
+  <h3>Most wins</h3><ol id="board"><li>Loading…</li></ol>
+  <button class="go" id="again">Play again</button><p id="next"></p>
+</div></div>
+<script>
+/* ═══ TURN ARTILLERY · a Multiplayer Agent starter ═════════════════════════════════════
+ * Take turns lobbing shells over the hills. Mind the wind; every shot digs a crater.
+ * Last tank standing wins. Turn-based, 2–4 players; bots take the empty tanks.
+ *
+ * WHERE THINGS ARE (search for the "── " headers):
+ *   CONFIG ........ tanks, turns, shells, wind, blasts, water, bots
+ *   WORLD ......... the hills (from a seed), craters, where a shell flies and what it hits
+ *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host
+ *   MATCH (HOST) .. seats, turns, wind, firing, blast damage, the rising water, the winner, the
+ *                   bots. Only the host writes these.
+ *   ME ............ driving, aiming and firing on my turn. I write only my own aim.
+ *   DRAW .......... camera, sky, hills, water, tanks, the shell, explosions
+ *   HUD & RESULTS . tank cards, whose turn, wind, results, leaderboard
+ *   INPUT ......... drag to aim, keys, drive buttons on touch
+ *
+ * HOW THE MULTIPLAYER WORKS (a relay room: no server code, the HOST's browser runs the match):
+ *   - The match is ONE shared field, `match`: {id, v, phase: intro|aim|flight|over, seed, seats,
+ *     turn, turnNo, wind, water, endsAt, shot, res, order, winner}. `seats` = every tank: {id,
+ *     name, color, hp, x, a, bot}. Only the HOST writes it, and `v` goes up on every write.
+ *   - The hills come from match.seed (the same on every screen). Every crater is in the shared
+ *     field `ground`, 10 characters each (see WORLD), so the dug-up hills match everywhere.
+ *   - On your turn you drive and aim on your own screen and write your OWN entity `t` {n, x, a,
+ *     p} (turn number, where your tank is, barrel angle, power) about 10 times a second, so
+ *     everyone sees your barrel move. You also write `hb` (heartbeat), `n` and `c` (name, color).
+ *   - To shoot you send "fire" {n, x, a, p} to the host. The host checks it is your turn, works
+ *     out the whole flight (wind, gravity, hills, tanks), adds the crater, the damage and the
+ *     falls, and writes it all at once: match.shot (where the shell goes and when it lands) and
+ *     match.res (everyone's health after it). Every screen flies the same shell, and shows the
+ *     crater and the damage when its own shell lands. Then the host moves to the next turn.
+ *   - Bots aim on the host (it tries lots of shots and picks one, with a little error) and
+ *     their barrel moves in the shared field `bot` {n, id, x, a, p}.
+ *   - The HOST is the lowest sessionId among live players (heartbeat seen in the last 3s),
+ *     worked out every frame. A new host carries on from `match` and `ground`.
+ *   - A player gone for 10s hands the tank to a bot; someone new takes a bot's tank.
+ *   - "again" (intent): someone pressed Play again on the results card.
+ *   - ?attract plays offline, bots only (the preview video is recorded from it).
+ *   - Leaderboard "wins": +1 for every match you win, shown on the results card.
+ */
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  seats: 3,            // bots fill the match up to this many tanks ...
+  maxSeats: 4,         // ... and 4 people make 4 tanks
+  hp: 100,             // tank health
+  turnMs: 25000,       // ms to drive, aim and fire before your turn passes
+  introMs: 3000,       // countdown before the first turn
+  settleMs: 1400,      // ms after a shell lands before the next turn
+  resultsMs: 10000,    // ms the results show before the next match
+  gravity: 420,        // px/s² pulling shells down
+  maxSpeed: 840,       // px/s a shell leaves the barrel at full power
+  windMax: 130,        // px/s² at the strongest wind (it changes every turn)
+  craterR: 44,         // px: the hole a shell digs
+  blastR: 74,          // px: how far the blast hurts
+  maxDamage: 50,       // damage at the middle of a blast (a direct hit adds 10)
+  fuel: 140,           // px a tank can drive in one turn
+  driveSpeed: 75,      // px/s
+  suddenDeath: 18,     // after this many turns the water starts rising ...
+  waterRise: 40,       // ... this many px every turn
+  botThinkMs: 1600,    // ms a bot takes to aim
+  botError: 0.06,      // how far off a bot's aim can be (radians, and a bit of power)
+  seatGraceMs: 10000,  // a player silent this long hands the tank to a bot
+  board: "wins",       // leaderboard name
+};
+const BOT_NAMES = ["Boomer", "Lobber", "Sarge", "Tilly", "Moss", "Rocco"];
+const COLORS = ["#ff5d73", "#4cc9f0", "#ffd166", "#06d6a0", "#c77dff", "#ff9f1c"];
+
+// ── WORLD ───────────────────────────────────────────────────────────────────────────
+// World px, y grows downward. The hills are a height for every x (the top of the ground).
+const WORLD = { w: 1600, h: 900 };
+const TAU = Math.PI * 2;
+function mulberry32(a) { return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+/** The hills of a match, from its seed (the same on every screen), before any crater. */
+function makeHills(seed) {
+  const r = mulberry32(seed), g = new Float32Array(WORLD.w + 1);
+  const waves = [[r() * TAU, 0.0024 + r() * 0.0018, 95], [r() * TAU, 0.006 + r() * 0.004, 50], [r() * TAU, 0.016 + r() * 0.008, 14]];
+  for (let x = 0; x <= WORLD.w; x++) { let y = 560; for (const [ph, f, amp] of waves) y += Math.sin(x * f + ph) * amp; g[x] = Math.max(320, Math.min(780, y)); }
+  return g;
+}
+/** Dig a round crater into the hills (only where the circle reaches the surface). */
+function carve(g, cx, cy, r) {
+  for (let x = Math.max(0, Math.ceil(cx - r)); x <= Math.min(WORLD.w, Math.floor(cx + r)); x++) {
+    const h = Math.sqrt(r * r - (x - cx) ** 2);
+    if (cy - h <= g[x] && cy + h > g[x]) g[x] = Math.min(WORLD.h + 80, cy + h);
+  }
+}
+const groundAt = (g, x) => { const i = Math.max(0, Math.min(WORLD.w, x)), a = Math.floor(i), b = Math.min(WORLD.w, a + 1); return g[a] + (g[b] - g[a]) * (i - a); };
+/** Where the tanks start: spread out, a little jiggle from the seed. */
+const spawnXs = (n, seed) => { const r = mulberry32(seed + 7); return Array.from({ length: n }, (_, i) => Math.round(170 + (WORLD.w - 340) * (n === 1 ? 0.5 : i / (n - 1)) + (r() - 0.5) * 90)); };
+// Craters on the wire: "c" + 10 characters each, base 36: x(3) y+200(3) radius(2) turn number(2).
+const b36 = (n, w) => Math.max(0, Math.round(n)).toString(36).padStart(w, "0").slice(-w);
+const packCraters = (list) => "c" + list.map(([x, y, r, n]) => b36(x, 3) + b36(y + 200, 3) + b36(r, 2) + b36(n, 2)).join("");
+function unpackCraters(str) {
+  const out = [];
+  if (typeof str !== "string") return out;
+  for (let i = 1; i + 10 <= str.length; i += 10) { const n = (a, b) => parseInt(str.slice(i + a, i + b), 36); out.push([n(0, 3), n(3, 6) - 200, n(6, 8), n(8, 10)]); }
+  return out;
+}
+const hillCache = new Map();
+/** The hills of `seed` with these craters dug in (cached: rebuilt only when a crater is added). */
+function hillsWith(seed, craters) {
+  const key = seed + ":" + craters.length + ":" + (craters.length ? craters[craters.length - 1].join(",") : "");
+  let g = hillCache.get(key);
+  if (!g) { g = makeHills(seed); for (const [x, y, r] of craters) carve(g, x, y, r); if (hillCache.size > 6) hillCache.clear(); hillCache.set(key, g); }
+  return g;
+}
+/** A shell leaving tank-at-x's barrel at angle a (0 = right, π/2 = straight up) with power p (0..1). */
+function shellFrom(g, x, a, p, wind) {
+  const py = groundAt(g, x) - 18;
+  return { x0: x + Math.cos(a) * 26, y0: py - Math.sin(a) * 26, vx: Math.cos(a) * p * CONFIG.maxSpeed, vy: -Math.sin(a) * p * CONFIG.maxSpeed, w: wind };
+}
+/** Where a shell is `t` seconds after it left the barrel: gravity pulls it down, the wind pushes it sideways. */
+const shellAt = (s, t) => ({ x: s.x0 + s.vx * t + 0.5 * s.w * t * t, y: s.y0 + s.vy * t + 0.5 * CONFIG.gravity * t * t });
+/** Fly a shell until it hits the hills, a tank or the water, or leaves the map. */
+function flight(s, g, tanks, by, water, step = 1 / 240) {
+  for (let t = step; t < 14; t += step) {
+    const p = shellAt(s, t);
+    if (p.x < -400 || p.x > WORLD.w + 400) return { T: t, x: p.x, y: p.y, hit: "out" };
+    if (p.y >= water) return { T: t, x: p.x, y: water, hit: "water" };
+    for (const k of tanks) if ((k.id !== by || t > 0.3) && Math.hypot(p.x - k.x, p.y - (k.y - 10)) < 20) return { T: t, x: p.x, y: p.y, hit: "tank" };
+    if (p.x >= 0 && p.x <= WORLD.w && p.y >= groundAt(g, p.x)) return { T: t, x: p.x, y: p.y, hit: "ground" };
+  }
+  return { T: 14, ...shellAt(s, 14), hit: "out" };
+}
+
+// ── CONNECTION ──────────────────────────────────────────────────────────────────────
+// The builder fills these in for this game. Downloaded from GitHub? Put your own pk_ key here.
+const MP_CONNECT = {
+  key: 'pk_REPLACE_ME',
+  room: 'turn-artillery',
+  endpoint: 'wss://live.multiplayeragent.com',
+  apiUrl: 'https://api.multiplayeragent.com',
+};
+const ATTRACT = new URLSearchParams(location.search).has("attract");
+
+/** Same shape as the SDK client, kept in this tab: offline play and ?attract. */
+function localRoom() {
+  const id = "local", state = { entities: { players: { [id]: {} } }, shared: {} }, subs = [];
+  let queued = false;
+  const emit = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; subs.forEach((f) => f(state)); }); } };
+  const put = (o, k, v) => { if (typeof k === "object") Object.assign(o, k); else o[k] = v; emit(); };
+  return {
+    sessionId: id, state, offline: true,
+    me: { set: (k, v) => put(state.entities.players[id], k, v) },
+    setShared: (k, v) => put(state.shared, k, v),
+    onState: (f) => { subs.push(f); f(state); }, onJoin() {}, onLeave() {}, on() {}, send() {},
+    onDisconnect() {}, onReconnect() {}, leave: async () => {},
+  };
+}
+async function connect() {
+  if (ATTRACT || typeof MP === "undefined") return localRoom();
+  try {
+    const mp = await Promise.race([MP.join({ ...MP_CONNECT }), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 10000))]);
+    window.mp = mp; // the builder calls window.mp.leave() when the page closes
+    return mp;
+  } catch (e) {
+    console.warn("Playing offline:", e && e.message);
+    return localRoom();
+  }
+}
+const parse = (v, fb) => { if (typeof v !== "string") return fb; try { return JSON.parse(v); } catch { return fb; } };
+const parsed = new Map();
+/** A JSON value from state, parsed once per change (read-only: never mutate what this returns). */
+function parseOnce(key, raw, fallback) {
+  const c = parsed.get(key);
+  if (c && c.raw === raw) return c.v;
+  const v = parse(raw, fallback); parsed.set(key, { raw, v }); return v;
+}
+let net = null, S = { entities: { players: {} }, shared: {} };
+const seenHb = new Map();
+/** Players whose heartbeat moved in the last 3s (plus us), sorted by sessionId. */
+function livePlayers() {
+  const now = performance.now(), out = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    const s = seenHb.get(id);
+    if (!s || s.hb !== p.hb) seenHb.set(id, { hb: p.hb, at: now });
+    if (id === net.sessionId || now - seenHb.get(id).at < 3000) out.push(id);
+  }
+  return out.sort();
+}
+const isHost = () => livePlayers()[0] === net.sessionId;
+/** Still in the room and heard from within the seat grace time (a backgrounded phone keeps its tank). */
+const stillHere = (id) => id === net.sessionId || (!!S.entities.players[id] && performance.now() - (seenHb.get(id)?.at ?? -1e9) < CONFIG.seatGraceMs);
+
+// ── MATCH (HOST) ────────────────────────────────────────────────────────────────────
+const host = { acting: false, last: null, craters: [], bot: null, lastBot: 0, again: false };
+/** The match as state has it, or the host's own newer write that hasn't come back yet. `v` only goes up. */
+function match() {
+  const m = parseOnce("match", S.shared.match, null);
+  return host.last && isHost() && (!m || host.last.v > m.v) ? host.last : m;
+}
+function writeMatch(m) { m = { ...m, v: (match()?.v ?? 0) + 1 }; host.last = m; net.setShared("match", JSON.stringify(m)); return m; }
+let cratersRead = { raw: undefined, list: [] };
+function unpackOnce() { if (cratersRead.raw !== S.shared.ground) cratersRead = { raw: S.shared.ground, list: unpackCraters(S.shared.ground) }; return cratersRead.list; }
+/** All the hills as they are now, every crater dug (what the host's rules use). */
+const hillsNow = (m) => hillsWith(m.seed, host.acting ? host.craters : unpackOnce());
+const humansHere = () => livePlayers().filter((id) => !(ATTRACT && id === me.id));
+const rid = () => "b" + Math.random().toString(36).slice(2, 6);
+function adopt() { host.acting = true; host.last = null; host.craters = unpackCraters(S.shared.ground); host.bot = null; }
+
+/** A fresh match: the people here plus bots up to CONFIG.seats, new hills, full health. */
+function startMatch(id) {
+  const humans = humansHere().filter((h) => h === me.id || S.entities.players[h]?.n).slice(0, CONFIG.maxSeats), n = Math.min(CONFIG.maxSeats, Math.max(CONFIG.seats, humans.length, 2));
+  const seed = Math.floor(Math.random() * 1e9), xs = spawnXs(n, seed), rand = mulberry32(seed + 3);
+  const ids = [...humans, ...Array.from({ length: n - humans.length }, () => null)];
+  for (let i = ids.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [ids[i], ids[j]] = [ids[j], ids[i]]; } // who stands where
+  const used = new Set(humans.map(colorOf)), names = new Set();
+  const seats = ids.map((pid, i) => {
+    const bot = !pid, name = bot ? BOT_NAMES.find((b) => !names.has(b)) || "Bot" : nameOf(pid);
+    const color = bot ? COLORS.find((c) => !used.has(c)) || "#ccc" : colorOf(pid);
+    names.add(name); used.add(color);
+    return { id: pid || rid(), name, color, hp: CONFIG.hp, x: xs[i], a: xs[i] < WORLD.w / 2 ? 0.9 : Math.PI - 0.9, bot: bot ? 1 : 0 };
+  });
+  host.craters = []; net.setShared("ground", packCraters([])); host.bot = null;
+  return writeMatch({ id, phase: "intro", seed, seats, turn: id % n, turnNo: 0, wind: 0, water: WORLD.h - 30, endsAt: Date.now() + CONFIG.introMs, shot: null, res: null, order: [], winner: null });
+}
+/** The next living tank's turn: new wind, the water maybe rises, and the match may be over. */
+function nextTurn(m, first = false) {
+  const turnNo = m.turnNo + 1, water = turnNo > CONFIG.suddenDeath ? m.water - CONFIG.waterRise : m.water, g = hillsNow(m);
+  const order = [...m.order];
+  const seats = m.seats.map((s) => { if (s.hp > 0 && groundAt(g, s.x) >= water - 4) { order.push(s.id); return { ...s, hp: 0 }; } return s; }); // the water got them
+  const alive = seats.filter((s) => s.hp > 0);
+  if (alive.length <= 1) return writeMatch({ ...m, seats, water, order, phase: "over", winner: alive.length ? alive[0].id : null, endsAt: Date.now() + CONFIG.resultsMs, shot: null });
+  let turn = first ? m.turn - 1 : m.turn;
+  do turn = (turn + 1 + seats.length) % seats.length; while (seats[turn].hp <= 0);
+  const wind = Math.random() < 0.2 ? 0 : Math.round((Math.random() * 2 - 1) * CONFIG.windMax);
+  host.bot = null;
+  return writeMatch({ ...m, seats, water, order, phase: "aim", turn, turnNo, wind, endsAt: Date.now() + CONFIG.turnMs, shot: null, res: null });
+}
+/** Fire for seat i: work out the whole flight and what it does, then write it all at once. */
+function launch(m, i, x, a, p) {
+  const g = hillsNow(m), s = m.seats[i];
+  x = Math.max(s.x - CONFIG.fuel - 5, Math.min(s.x + CONFIG.fuel + 5, Math.max(12, Math.min(WORLD.w - 12, x))));
+  a = Math.max(-0.35, Math.min(Math.PI + 0.35, a)); p = Math.max(0.05, Math.min(1, p));
+  const shell = shellFrom(g, x, a, p, m.wind);
+  const seats = m.seats.map((k, j) => (j === i ? { ...k, x: Math.round(x), a: +a.toFixed(3) } : k));
+  const tanks = seats.filter((k) => k.hp > 0).map((k) => ({ id: k.id, x: k.x, y: groundAt(g, k.x) }));
+  const end = flight(shell, g, tanks, s.id, m.water);
+  const hp = seats.map((k) => k.hp), dmg = seats.map(() => 0);
+  if (end.hit === "ground" || end.hit === "tank") {
+    const cx = Math.round(end.x), cy = Math.round(end.y), after = Float32Array.from(g);
+    carve(after, cx, cy, CONFIG.craterR);
+    seats.forEach((k, j) => {
+      if (k.hp <= 0) return;
+      const y0 = groundAt(g, k.x), y1 = groundAt(after, k.x), d = Math.hypot(end.x - k.x, end.y - (y0 - 10));
+      let hurt = d < CONFIG.blastR ? CONFIG.maxDamage * (1 - d / CONFIG.blastR) + (end.hit === "tank" && d < 22 ? 10 : 0) : 0;
+      if (y1 - y0 > 30) hurt += (y1 - y0 - 30) * 0.3; // a fall into the new crater
+      if (y1 >= m.water - 4) hurt = k.hp;               // ... or into the water
+      dmg[j] = Math.round(Math.min(k.hp, hurt)); hp[j] = k.hp - dmg[j];
+    });
+    host.craters = [...host.craters, [cx, cy, CONFIG.craterR, m.turnNo]];
+    net.setShared("ground", packCraters(host.craters));
+  }
+  const shot = { n: m.turnNo, by: s.id, x0: +shell.x0.toFixed(1), y0: +shell.y0.toFixed(1), vx: +shell.vx.toFixed(1), vy: +shell.vy.toFixed(1), w: shell.w, T: +end.T.toFixed(3), ix: Math.round(end.x), iy: Math.round(end.y), hit: end.hit };
+  return writeMatch({ ...m, seats, phase: "flight", shot, res: { n: m.turnNo, hp, dmg }, endsAt: Date.now() + end.T * 1000 + CONFIG.settleMs });
+}
+/** The shell has landed everywhere: health from the result, then the next turn. */
+function commit(m) {
+  const order = [...m.order];
+  const seats = m.seats.map((s, j) => { const hp = m.res && m.res.n === m.turnNo ? m.res.hp[j] : s.hp; if (s.hp > 0 && hp <= 0) order.push(s.id); return { ...s, hp }; });
+  return nextTurn({ ...m, seats, order });
+}
+/** A "fire" intent (or my own shot as host): only from the tank whose turn it is, on this exact turn. */
+function hostFire(from, msg) {
+  const m = match();
+  if (!m || m.phase !== "aim" || Number(msg.n) !== m.turnNo || m.seats[m.turn]?.id !== from) return;
+  launch(m, m.turn, Number(msg.x) || 0, Number(msg.a) || 0, Number(msg.p) || 0);
+}
+/** Gone players hand their tank to a bot; someone waiting takes a bot's tank (never mid-shot). */
+function fixSeats(m) {
+  if (ATTRACT || m.phase === "over") return m;
+  let seats = m.seats, changed = false;
+  const names = new Set(seats.map((s) => s.name));
+  seats = seats.map((s) => {
+    if (s.bot || stillHere(s.id)) return s;
+    changed = true; const name = BOT_NAMES.find((b) => !names.has(b)) || "Bot"; names.add(name);
+    return { ...s, id: rid(), bot: 1, name };
+  });
+  for (const id of humansHere().filter((h) => !seats.some((s) => s.id === h) && S.entities.players[h]?.n)) { // (once their name has arrived)
+    const j = seats.findIndex((s, k) => s.bot && s.hp > 0 && !(k === m.turn && m.phase !== "intro"));
+    if (j < 0 || m.phase === "flight") break;
+    changed = true; seats = seats.map((s, k) => (k === j ? { ...s, id, bot: 0, name: nameOf(id), color: colorOf(id) } : s));
+  }
+  return changed ? writeMatch({ ...m, seats }) : m;
+}
+/** A bot's turn: pick a shot, swing the barrel over to it, fire. */
+function botTurn(m, now) {
+  const s = m.seats[m.turn];
+  if (!host.bot || host.bot.n !== m.turnNo || host.bot.id !== s.id) host.bot = { n: m.turnNo, id: s.id, x: s.x, a0: s.a, p0: 0.2, a: s.a, p: 0.2, plan: botPlan(m, m.turn), start: now };
+  const b = host.bot, k = Math.min(1, Math.max(0, (now - b.start - CONFIG.botThinkMs * 0.3) / (CONFIG.botThinkMs * 0.55))), e = k * k * (3 - 2 * k);
+  b.a = b.a0 + (b.plan.a - b.a0) * e; b.p = b.p0 + (b.plan.p - b.p0) * e;
+  if (now - host.lastBot > 100) { host.lastBot = now; net.setShared("bot", JSON.stringify({ n: b.n, id: b.id, x: b.x, a: +b.a.toFixed(3), p: +b.p.toFixed(3) })); }
+  if (now - b.start > CONFIG.botThinkMs) launch(m, m.turn, b.x, b.plan.a, b.plan.p);
+}
+/** Try lots of angles and powers against one rival, keep the closest, then miss by a little. */
+function botPlan(m, i) {
+  const me0 = m.seats[i], g = hillsNow(m), foes = m.seats.filter((s, j) => j !== i && s.hp > 0);
+  const tg = Math.random() < 0.5 ? foes.reduce((a, b) => (a.hp <= b.hp ? a : b)) : foes.reduce((a, b) => (Math.abs(a.x - me0.x) <= Math.abs(b.x - me0.x) ? a : b));
+  const tanks = m.seats.filter((s) => s.hp > 0).map((s) => ({ id: s.id, x: s.x, y: groundAt(g, s.x) })), dir = tg.x > me0.x ? 1 : -1, ty = groundAt(g, tg.x) - 10;
+  let best = { a: dir > 0 ? 0.9 : Math.PI - 0.9, p: 0.6, d: Infinity };
+  for (let deg = 18; deg <= 78; deg += 3) for (let p = 0.25; p <= 1.001; p += 0.05) {
+    const a = dir > 0 ? deg * Math.PI / 180 : Math.PI - deg * Math.PI / 180;
+    const end = flight(shellFrom(g, me0.x, a, p, m.wind), g, tanks, me0.id, m.water, 1 / 90);
+    const d = Math.hypot(end.x - tg.x, end.y - ty) + (Math.hypot(end.x - me0.x, end.y - groundAt(g, me0.x)) < CONFIG.blastR ? 900 : 0);
+    if (d < best.d) best = { a, p, d };
+  }
+  const err = CONFIG.botError * (Math.random() < 0.25 ? 2.5 : 1); // now and then a bot fumbles
+  return { a: best.a + (Math.random() - 0.5) * 2 * err, p: Math.max(0.1, Math.min(1, best.p + (Math.random() - 0.5) * err * 0.8)) };
+}
+function hostTick(now) {
+  if (!host.acting) adopt();
+  let m = match();
+  const t = Date.now();
+  if (!m) m = startMatch(1);
+  m = fixSeats(m);
+  if (m.phase === "intro" && t >= m.endsAt) m = nextTurn(m, true);
+  else if (m.phase === "aim") { if (t >= m.endsAt) m = nextTurn(m); else if (m.seats[m.turn].bot) botTurn(m, now); } // out of time: the turn passes
+  else if (m.phase === "flight" && t >= m.endsAt) m = commit(m);
+  else if (m.phase === "over" && (t >= m.endsAt || host.again)) m = startMatch(m.id + 1);
+  host.again = false;
+}
+
+// ── ME ──────────────────────────────────────────────────────────────────────────────
+const myName = (() => { try { return localStorage.getItem("mpa-name") || ""; } catch { return ""; } })() ||
+  ["Major", "Captain", "Lucky", "Rusty", "Steady", "Sly"][Math.floor(Math.random() * 6)] + " " + ["Badger", "Mortar", "Moose", "Otter", "Thunder", "Pickle"][Math.floor(Math.random() * 6)];
+const me = { id: "", color: COLORS[0], x: 0, a: 0.9, p: 0.55, fuel: CONFIG.fuel, turnN: -1, firedN: -1, firedAt: 0, charging: false, lastSend: 0, sent: "", shownFor: -1 };
+const nameOf = (id) => (id === me.id ? myName : S.entities.players?.[id]?.n || match()?.seats?.find((s) => s.id === id)?.name || "Player");
+const colorOf = (id) => (id === me.id ? me.color : S.entities.players?.[id]?.c || "#ccc");
+/** A tank's name: a person's current name (from their own entity), or the bot's. */
+const seatName = (s) => (s.bot ? s.name : s.id === me.id ? myName : S.entities.players?.[s.id]?.n || s.name);
+/** A tank's color: a person's current color, or the bot's (never the same as a person's). */
+function seatColor(m, s) {
+  if (!s.bot) return colorOf(s.id);
+  const people = new Set(m.seats.filter((q) => !q.bot).map((q) => colorOf(q.id)));
+  if (!people.has(s.color)) return s.color;
+  const used = new Set([...people, ...m.seats.filter((q) => q.bot).map((q) => q.color)]);
+  return COLORS.find((c) => !used.has(c)) || s.color;
+}
+const mySeat = (m) => m.seats.findIndex((s) => s.id === me.id);
+const myTurn = (m) => m.phase === "aim" && mySeat(m) === m.turn && !(me.firedN === m.turnNo && performance.now() - me.firedAt < 2500);
+function myTick(dt, m) {
+  const i = mySeat(m);
+  if (m.phase === "aim" && i === m.turn && me.turnN !== m.turnNo) { // my turn starts: from where my tank is
+    me.turnN = m.turnNo; me.x = m.seats[i].x; me.a = m.seats[i].a; me.fuel = CONFIG.fuel; me.charging = false; drag = null;
+    sfx("turn"); publish(true);
+  }
+  if (!myTurn(m)) return;
+  const g = shownHills(m), dir = (keys.has("arrowright") || keys.has("d") || keys.has("pad:right") ? 1 : 0) - (keys.has("arrowleft") || keys.has("a") || keys.has("pad:left") ? 1 : 0);
+  if (dir && me.fuel > 0 && !drag) { // drive, but not up a cliff
+    const nx = Math.max(12, Math.min(WORLD.w - 12, me.x + dir * CONFIG.driveSpeed * dt));
+    if (groundAt(g, me.x) - groundAt(g, nx) < Math.abs(nx - me.x) * 1.6 + 0.5) { me.fuel -= Math.abs(nx - me.x); me.x = nx; }
+    if ((Math.cos(me.a) > 0) !== (dir > 0)) me.a = Math.PI - me.a; // face the way you drive
+  }
+  const up = keys.has("arrowup") || keys.has("w"), down = keys.has("arrowdown") || keys.has("s");
+  if (up || down) { const toward = (up ? 1 : -1) * (Math.cos(me.a) >= 0 ? 1 : -1); me.a = Math.max(-0.3, Math.min(Math.PI + 0.3, me.a + toward * 1.1 * dt)); }
+  if (me.charging) me.p = Math.min(1, me.p + dt / 1.5);
+  publish(false);
+}
+function publish(force) {
+  const now = performance.now(), m = match();
+  if (!m || (!force && now - me.lastSend < 100)) return; // ~10/s, and only when something changed
+  const t = JSON.stringify({ n: m.turnNo, x: Math.round(me.x), a: +me.a.toFixed(3), p: +me.p.toFixed(3) });
+  if (t === me.sent && !force) return;
+  me.lastSend = now; me.sent = t; net.me.set("t", t);
+}
+function fire() {
+  const m = match();
+  if (!m || !myTurn(m)) return;
+  me.firedN = m.turnNo; me.firedAt = performance.now(); me.charging = false;
+  const msg = { n: m.turnNo, x: Math.round(me.x), a: +me.a.toFixed(3), p: +me.p.toFixed(3) };
+  publish(true); sfx("fire");
+  if (isHost()) hostFire(me.id, msg); else net.send("fire", msg);
+}
+/** Two people in one color: the one with the higher sessionId picks a free color. */
+function fixColor() {
+  const others = Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId);
+  if (!others.some(([id, p]) => p.c === me.color && id < net.sessionId)) return;
+  const taken = new Set(others.map(([, p]) => p.c)), free = COLORS.find((c) => !taken.has(c));
+  if (free) { me.color = free; net.me.set("c", free); }
+}
+
+// ── DRAW ────────────────────────────────────────────────────────────────────────────
+const cv = document.getElementById("game"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+function fit() { DPR = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR; }
+addEventListener("resize", fit); addEventListener("orientationchange", fit); fit();
+const cam = { x: WORLD.w / 2, y: 520, z: 1, shake: 0 };
+const zoomFor = () => (ATTRACT ? W / 1200 : H > W ? W / 640 : Math.max(W / WORLD.w, Math.min(W / 1150, H / 680)));
+const toWorld = (px, py) => ({ x: cam.x + (px - W / 2) / cam.z, y: cam.y + (py - H / 2) / cam.z }); // the same transform the frame is drawn with
+const fx = { parts: [], rings: [], nums: [] };
+// The shell in the air on THIS screen: it lands here when its flight time is up, then the crater shows.
+const anim = { n: -1, s: null, start: 0, landed: true, aimSeen: -1 };
+function syncShot(m, now) {
+  if (m.phase === "aim") anim.aimSeen = m.turnNo;
+  const s = m.shot;
+  if (!s || s.n === anim.n) return;
+  const fresh = anim.aimSeen === s.n; // a shell I saw leave the barrel (not one already flying when I arrived)
+  Object.assign(anim, { n: s.n, s, start: now, landed: !(fresh && m.phase === "flight") });
+  if (!anim.landed) { const k = m.seats.find((q) => q.id === s.by); muzzle(s.x0, s.y0, k ? seatColor(m, k) : "#fff"); }
+}
+function stepShot(m, now) {
+  if (anim.landed || !anim.s) return;
+  const t = (now - anim.start) / 1000, s = anim.s;
+  if (t < s.T) { const p = shellAt(s, t); if (Math.random() < 0.8) fx.parts.push({ x: p.x, y: p.y, vx: 0, vy: -10, life: 0.6, max: 0.6, size: 5, color: "#ffffffaa", smoke: true }); return; }
+  anim.landed = true;
+  if (s.hit === "water") { splash(s.ix, s.iy); return; }
+  if (s.hit === "out") return;
+  boom(s.ix, s.iy);
+  const res = m.res && m.res.n === s.n ? m.res : null;
+  if (res) m.seats.forEach((k, j) => {
+    if (res.dmg[j] <= 0) return;
+    const y = groundAt(hillsNow(m), k.x);
+    fx.nums.push({ x: k.x, y: y - 50, t: 0, text: "-" + res.dmg[j] });
+    if (k.hp > 0 && res.hp[j] <= 0) setTimeout(() => { boom(k.x, y - 12); boom(k.x, y - 30); cam.shake = 26; }, 250); // a tank goes up
+  });
+}
+/** The hills this screen shows: every crater, except the one under a shell that is still in the air here. */
+function shownHills(m) {
+  const list = host.acting ? host.craters : unpackOnce();
+  if (m.phase === "intro") return hillsWith(m.seed, []);
+  return hillsWith(m.seed, list.filter(([, , , n]) => n < m.turnNo || (n === anim.n && anim.landed)));
+}
+/** Health this screen shows: the result as soon as the shell has landed here. */
+const shownHp = (m, j) => (m.phase === "flight" && m.res && m.res.n === anim.n && anim.landed ? m.res.hp[j] : m.seats[j].hp);
+// Others' tanks on their turn are eased toward what they last wrote (x and barrel), so they don't step.
+const eased = new Map();
+function tankLook(m, j, dt) {
+  const s = m.seats[j];
+  let x = s.x, a = s.a, p = 0;
+  if (m.phase === "aim" && j === m.turn) {
+    if (s.id === me.id) return { x: me.x, a: me.a, p: me.p };
+    const live = s.bot ? (host.acting ? host.bot : parseOnce("bot", S.shared.bot, null)) : parseOnce("t:" + s.id, S.entities.players[s.id]?.t, null);
+    if (live && live.n === m.turnNo && (!s.bot || live.id === s.id)) { x = live.x; a = live.a; p = live.p; }
+  }
+  let e = eased.get(s.id);
+  if (!e || Math.abs(e.x - x) > 200) { e = { x, a, p }; eased.set(s.id, e); }
+  const k = s.bot && host.acting ? 1 : 1 - Math.pow(0.0005, dt);
+  e.x += (x - e.x) * k; e.a += (a - e.a) * k; e.p += (p - e.p) * k;
+  return e;
+}
+function boom(x, y) {
+  for (let i = 0; i < 34; i++) { const a = Math.random() * TAU, sp = 80 + Math.random() * 320; fx.parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120, life: 0.5 + Math.random() * 0.5, max: 1, size: 3 + Math.random() * 5, color: ["#fff3b0", "#ffb347", "#ff6b3d"][i % 3], grav: 300 }); }
+  for (let i = 0; i < 22; i++) { const a = -Math.PI * Math.random(), sp = 150 + Math.random() * 300; fx.parts.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1 + Math.random() * 0.6, max: 1.6, size: 3 + Math.random() * 4, color: "#7a4a2c", grav: 900 }); }
+  for (let i = 0; i < 10; i++) fx.parts.push({ x: x + (Math.random() - 0.5) * 40, y: y - Math.random() * 30, vx: (Math.random() - 0.5) * 40, vy: -30 - Math.random() * 40, life: 1.4, max: 1.4, size: 14 + Math.random() * 12, color: "#55505a", smoke: true });
+  fx.rings.push({ x, y, t: 0, r: CONFIG.blastR }); cam.shake = 16; sfx("boom");
+}
+function splash(x, y) { for (let i = 0; i < 26; i++) fx.parts.push({ x, y, vx: (Math.random() - 0.5) * 220, vy: -150 - Math.random() * 300, life: 0.9, max: 0.9, size: 3 + Math.random() * 3, color: "#bfe6ff", grav: 900 }); sfx("splash"); }
+function muzzle(x, y, color) { for (let i = 0; i < 10; i++) fx.parts.push({ x, y, vx: (Math.random() - 0.5) * 120, vy: (Math.random() - 0.5) * 120, life: 0.4, max: 0.4, size: 6, color: i % 2 ? color : "#ffffffcc", smoke: true }); cam.shake = Math.max(cam.shake, 4); }
+function stepFx(dt) {
+  for (let i = fx.parts.length - 1; i >= 0; i--) { const p = fx.parts[i]; p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.grav || 0) * dt; if (p.smoke) { p.vx *= 0.96; p.size += dt * 10; } if (p.life <= 0) fx.parts.splice(i, 1); }
+  for (let i = fx.rings.length - 1; i >= 0; i--) if ((fx.rings[i].t += dt) > 0.35) fx.rings.splice(i, 1);
+  for (let i = fx.nums.length - 1; i >= 0; i--) { const n = fx.nums[i]; n.t += dt; n.y -= 30 * dt; if (n.t > 1.6) fx.nums.splice(i, 1); }
+  if (fx.parts.length > 700) fx.parts.splice(0, fx.parts.length - 700);
+}
+const clouds = Array.from({ length: 7 }, (_, i) => ({ x: Math.random() * 2200 - 300, y: 60 + Math.random() * 260, s: 0.6 + Math.random() * 0.8, k: i }));
+let hillsShown = null, hillPath = null, grassPath = null;
+/** Paths for the hills and their grass, rebuilt only when the hills change. */
+function hillPaths(g, seed) {
+  if (g === hillsShown) return;
+  hillsShown = g; hillPath = new Path2D(); grassPath = new Path2D();
+  hillPath.moveTo(-400, WORLD.h + 300); hillPath.lineTo(-400, g[0]);
+  for (let x = 0; x <= WORLD.w; x += 4) hillPath.lineTo(x, g[x]);
+  hillPath.lineTo(WORLD.w + 400, g[WORLD.w]); hillPath.lineTo(WORLD.w + 400, WORLD.h + 300); hillPath.closePath();
+  const fresh = hillsWith(seed, []); // grass only where nothing has dug yet
+  let on = false;
+  for (let x = 0; x <= WORLD.w; x += 4) { const ok = g[x] - fresh[x] < 2; if (ok) { if (on) grassPath.lineTo(x, g[x]); else grassPath.moveTo(x, g[x]); } on = ok; }
+}
+function draw(m, t, dt) {
+  const g = shownHills(m);
+  hillPaths(g, m.seed);
+  // the camera: the shell in the air, or whoever's turn it is, or everyone
+  let fxp = null;
+  if (!anim.landed && anim.s) { const p = shellAt(anim.s, Math.min(anim.s.T, (performance.now() - anim.start) / 1000)); fxp = { x: p.x, y: Math.max(p.y, ATTRACT ? 470 : 300) }; } // keep the hills in view
+  else if (m.phase === "flight" && m.shot && m.shot.hit !== "out") fxp = { x: m.shot.ix, y: m.shot.iy };
+  else if (m.phase === "aim") { const k = tankLook(m, m.turn, 0); fxp = { x: k.x, y: groundAt(g, k.x) - 80 }; }
+  else { const up = m.seats.filter((s) => s.hp > 0); fxp = { x: up.reduce((a, s) => a + s.x, 0) / Math.max(1, up.length) || WORLD.w / 2, y: 520 }; }
+  const zt = zoomFor(); cam.z += (zt - cam.z) * Math.min(1, dt * 4);
+  const vw = W / cam.z, vh = H / cam.z, follow = Math.min(1, dt * (anim.landed ? 2.5 : 5));
+  cam.x += (fxp.x - cam.x) * follow; cam.y += (Math.min(fxp.y, 600) - cam.y) * follow;
+  cam.x = vw >= WORLD.w ? WORLD.w / 2 : Math.max(vw / 2, Math.min(WORLD.w - vw / 2, cam.x));
+  cam.y = Math.min(WORLD.h + 30 - vh / 2, Math.max(-700 + vh / 2, cam.y));
+  cam.shake *= Math.pow(0.02, dt);
+  // sky, sun, far mountains (screen space, with a little parallax)
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const sky = ctx.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, "#2a4f86"); sky.addColorStop(0.6, "#79b8e8"); sky.addColorStop(1, "#ffe0b0");
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#fff4c8"; ctx.beginPath(); ctx.arc(W * 0.8 - cam.x * 0.02, H * 0.2, Math.min(W, H) * 0.07, 0, TAU); ctx.fill();
+  for (const [depth, color, base, amp] of [[0.15, "#9cb9d8", 0.62, 70], [0.3, "#7f9ec4", 0.7, 50]]) {
+    ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(0, H);
+    for (let x = 0; x <= W; x += 16) { const wx = x + cam.x * depth; ctx.lineTo(x, H * base - Math.abs(Math.sin(wx / 210)) * amp - Math.sin(wx / 77) * amp * 0.3 + (cam.y - 500) * depth * -0.3); }
+    ctx.lineTo(W, H); ctx.fill();
+  }
+  const sx = (Math.random() - 0.5) * cam.shake, sy = (Math.random() - 0.5) * cam.shake;
+  ctx.setTransform(DPR * cam.z, 0, 0, DPR * cam.z, DPR * (W / 2 - cam.x * cam.z + sx), DPR * (H / 2 - cam.y * cam.z + sy));
+  // clouds drift with the wind (that's how you read it at a glance)
+  for (const c of clouds) {
+    c.x += (m.wind || 0) * 0.12 * dt + 6 * dt; if (c.x > WORLD.w + 500) c.x = -500; if (c.x < -500) c.x = WORLD.w + 500;
+    ctx.fillStyle = "#ffffffcc"; ctx.beginPath();
+    for (const [ox, oy, r] of [[0, 0, 34], [36, 8, 28], [-34, 10, 24], [14, -16, 26]]) { ctx.moveTo(c.x + ox * c.s + r * c.s, c.y + oy * c.s); ctx.arc(c.x + ox * c.s, c.y + oy * c.s, r * c.s, 0, TAU); }
+    ctx.fill();
+  }
+  // the hills: dirt with darker layers, grass on top where nothing has dug
+  const dirt = ctx.createLinearGradient(0, 300, 0, WORLD.h); dirt.addColorStop(0, "#a8754a"); dirt.addColorStop(1, "#5a3a24");
+  ctx.fillStyle = dirt; ctx.fill(hillPath);
+  ctx.save(); ctx.clip(hillPath); ctx.strokeStyle = "#00000022"; ctx.lineWidth = 10;
+  for (let k = 0; k < 6; k++) { ctx.beginPath(); for (let x = -400; x <= WORLD.w + 400; x += 40) ctx.lineTo(x, 470 + k * 70 + Math.sin(x / 130 + k * 1.7 + m.seed % 7) * 18); ctx.stroke(); }
+  ctx.strokeStyle = "#3d2616"; ctx.lineWidth = 5; ctx.stroke(hillPath); ctx.restore();
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.strokeStyle = "#4e9a3a"; ctx.lineWidth = 12; ctx.stroke(grassPath);
+  ctx.strokeStyle = "#7cd65a"; ctx.lineWidth = 5; ctx.save(); ctx.translate(0, -3); ctx.stroke(grassPath); ctx.restore();
+  // tanks
+  for (let j = 0; j < m.seats.length; j++) drawTank(m, j, g, t, dt);
+  // my aim: a dotted arc for the first part of the flight (gravity only: the wind is up to you)
+  const mine = mySeat(m);
+  if (myTurn(m) && mine >= 0) {
+    const s = shellFrom(g, me.x, me.a, me.p, 0);
+    ctx.fillStyle = "#ffffffd0";
+    for (let i = 1; i <= 14; i++) { const p = shellAt(s, i * 0.04); ctx.globalAlpha = 1 - i / 16; ctx.beginPath(); ctx.arc(p.x, p.y, 3.2, 0, TAU); ctx.fill(); }
+    ctx.globalAlpha = 1;
+  }
+  // the shell
+  if (!anim.landed && anim.s) {
+    const p = shellAt(anim.s, (performance.now() - anim.start) / 1000);
+    ctx.fillStyle = "#26262e"; ctx.beginPath(); ctx.arc(p.x, p.y, 6.5, 0, TAU); ctx.fill();
+    ctx.fillStyle = "#ffffff99"; ctx.beginPath(); ctx.arc(p.x - 2, p.y - 2, 2, 0, TAU); ctx.fill();
+  }
+  // explosions, smoke, dirt
+  for (const p of fx.parts) { ctx.globalAlpha = Math.max(0, Math.min(1, p.life / p.max * 1.5)) * (p.smoke ? 0.55 : 1); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, TAU); ctx.fill(); }
+  for (const r of fx.rings) { ctx.globalAlpha = 1 - r.t / 0.35; ctx.fillStyle = "#fff6d0"; ctx.beginPath(); ctx.arc(r.x, r.y, r.r * (0.4 + r.t * 2), 0, TAU); ctx.fill(); }
+  ctx.globalAlpha = 1;
+  // water at the bottom (it rises in sudden death)
+  const wy = m.water;
+  ctx.fillStyle = "#2f7fd0cc"; ctx.beginPath(); ctx.moveTo(-500, WORLD.h + 400);
+  for (let x = -500; x <= WORLD.w + 500; x += 20) ctx.lineTo(x, wy + Math.sin(x / 40 + t * 2) * 4);
+  ctx.lineTo(WORLD.w + 500, WORLD.h + 400); ctx.fill();
+  ctx.strokeStyle = "#cfeaff"; ctx.lineWidth = 3; ctx.beginPath();
+  for (let x = -500; x <= WORLD.w + 500; x += 20) ctx.lineTo(x, wy + Math.sin(x / 40 + t * 2) * 4); ctx.stroke();
+  ctx.textAlign = "center";
+  for (const n of fx.nums) { ctx.globalAlpha = Math.min(1, 2 - n.t); ctx.font = "900 26px system-ui, sans-serif"; ctx.lineWidth = 5; ctx.strokeStyle = "#5a0010"; ctx.strokeText(n.text, n.x, n.y); ctx.fillStyle = "#ff5d73"; ctx.fillText(n.text, n.x, n.y); }
+  ctx.globalAlpha = 1;
+  // drag-to-aim arrow
+  if (drag && drag.on) {
+    const py = groundAt(g, me.x) - 18, len = 40 + me.p * 140;
+    ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(me.x, py); ctx.lineTo(me.x + Math.cos(me.a) * len, py - Math.sin(me.a) * len); ctx.stroke();
+  }
+  // tanks off screen: an arrow at the edge; a shell above the screen: a marker at the top
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (!anim.landed && anim.s) {
+    const p = shellAt(anim.s, (performance.now() - anim.start) / 1000), px = (p.x - cam.x) * cam.z + W / 2;
+    if ((p.y - cam.y) * cam.z + H / 2 < 0 && px > 0 && px < W) { ctx.fillStyle = "#26262e"; ctx.beginPath(); ctx.moveTo(px, 6); ctx.lineTo(px - 8, 20); ctx.lineTo(px + 8, 20); ctx.fill(); }
+  }
+  if (!ATTRACT) for (const s of m.seats) {
+    if (s.hp <= 0) continue;
+    const px = (s.x - cam.x) * cam.z + W / 2;
+    if (px > 0 && px < W) continue;
+    const left = px <= 0, py = Math.max(80, Math.min(H - 80, (groundAt(g, s.x) - 30 - cam.y) * cam.z + H / 2));
+    ctx.fillStyle = seatColor(m, s); ctx.beginPath(); ctx.moveTo(left ? 8 : W - 8, py); ctx.lineTo(left ? 24 : W - 24, py - 10); ctx.lineTo(left ? 24 : W - 24, py + 10); ctx.fill();
+  }
+}
+function drawTank(m, j, g, t, dt) {
+  const s = m.seats[j], look = tankLook(m, j, dt), x = look.x, y = groundAt(g, x), hp = shownHp(m, j), dead = hp <= 0, color = seatColor(m, s);
+  const slope = Math.atan2(groundAt(g, x + 12) - groundAt(g, x - 12), 24);
+  ctx.save(); ctx.translate(x, y); ctx.rotate(slope * 0.8);
+  ctx.fillStyle = "#00000033"; ctx.beginPath(); ctx.ellipse(0, 1, 24, 5, 0, 0, TAU); ctx.fill();
+  ctx.fillStyle = "#2a2a35"; ctx.beginPath(); ctx.roundRect(-21, -10, 42, 11, 5.5); ctx.fill(); // treads
+  ctx.fillStyle = "#6d6d7c"; for (let k = -15; k <= 15; k += 10) { ctx.beginPath(); ctx.arc(k, -4.5, 3, 0, TAU); ctx.fill(); }
+  ctx.fillStyle = dead ? "#4a4a50" : color; ctx.beginPath(); ctx.moveTo(-18, -9); ctx.lineTo(18, -9); ctx.lineTo(13, -19); ctx.lineTo(-13, -19); ctx.closePath(); ctx.fill(); // body
+  ctx.fillStyle = "#ffffff40"; ctx.fillRect(-12, -18, 24, 3);
+  ctx.restore();
+  if (dead) { if (Math.random() < dt * 6) fx.parts.push({ x: x + (Math.random() - 0.5) * 10, y: y - 16, vx: 0, vy: -30, life: 1.2, max: 1.2, size: 6, color: "#3c3a40", smoke: true }); return; }
+  const py = y - 18; // the barrel turns on top of the dome
+  ctx.strokeStyle = "#2a2a35"; ctx.lineWidth = 7; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(x, py); ctx.lineTo(x + Math.cos(look.a) * 26, py - Math.sin(look.a) * 26); ctx.stroke();
+  ctx.strokeStyle = "#8a8a9a"; ctx.lineWidth = 3; ctx.stroke();
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, py, 10, Math.PI, 0); ctx.fill();
+  ctx.fillStyle = "#ffffff55"; ctx.beginPath(); ctx.arc(x - 3, py - 4, 3, 0, TAU); ctx.fill();
+  const active = m.phase === "aim" && j === m.turn;
+  if (active) { // whose turn: a bouncing arrow and the power bar
+    const by = py - 52 + Math.sin(t * 6) * 5;
+    ctx.fillStyle = color; ctx.strokeStyle = "#0008"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x - 10, by - 12); ctx.lineTo(x + 10, by - 12); ctx.lineTo(x, by); ctx.closePath(); ctx.fill(); ctx.stroke();
+    if (look.p > 0.02) { ctx.fillStyle = "#0008"; ctx.fillRect(x - 22, y + 8, 44, 6); ctx.fillStyle = `hsl(${120 - look.p * 120}, 90%, 55%)`; ctx.fillRect(x - 22, y + 8, 44 * look.p, 6); }
+  }
+  if (ATTRACT) return;
+  ctx.fillStyle = "#0008"; ctx.fillRect(x - 20, py - 30, 40, 5); ctx.fillStyle = hp > 35 ? "#7cd65a" : "#ff5d73"; ctx.fillRect(x - 20, py - 30, 40 * Math.max(0, hp) / CONFIG.hp, 5);
+  ctx.font = "700 13px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.lineWidth = 4; ctx.strokeStyle = "#000a";
+  const label = s.id === me.id ? "You" : seatName(s);
+  ctx.strokeText(label, x, py - 36); ctx.fillStyle = s.id === me.id ? "#ffd166" : "#fff"; ctx.fillText(label, x, py - 36);
+}
+
+// ── HUD & RESULTS ───────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+let board = null;
+const startedAt = performance.now();
+function hud(m) {
+  const t = Date.now(), i = mySeat(m), cur = m.seats[m.turn];
+  if (m.phase === "over" && !$("over").hidden) $("msg").innerHTML = "";
+  else if (m.phase === "intro") $("msg").innerHTML = `${Math.max(1, Math.ceil((m.endsAt - t) / 1000))}<small>${m.seats.length} tanks · last one standing wins</small>`;
+  else if (m.phase === "over") $("msg").innerHTML = m.winner === me.id ? "YOU WIN!" : m.winner ? `${esc(seatName(m.seats.find((s) => s.id === m.winner) || {}))} wins!` : "DRAW!";
+  else if (m.phase === "aim" && m.turnNo === CONFIG.suddenDeath + 1 && t < m.endsAt - CONFIG.turnMs + 2500) $("msg").innerHTML = "SUDDEN DEATH<small>The water rises every turn</small>";
+  else $("msg").innerHTML = "";
+  if (ATTRACT) { for (const id of ["cards", "turn", "hint", "net"]) $(id).textContent = ""; return; }
+  $("cards").innerHTML = m.seats.map((s, j) => { const hp = Math.max(0, shownHp(m, j)); return `<div class="tc ${hp <= 0 ? "dead" : ""} ${j === m.turn && m.phase !== "over" ? "now" : ""} ${s.id === me.id ? "me" : ""}" style="--c:${seatColor(m, s)}"><span>${esc(s.id === me.id ? "You" : seatName(s))}</span> · ${hp}<i><b style="width:${hp}%"></b></i></div>`; }).join("");
+  const left = Math.max(0, Math.ceil((m.endsAt - t) / 1000)), w = m.wind || 0, arrows = Math.round(Math.abs(w) / CONFIG.windMax * 3);
+  const windText = !w || !arrows ? "No wind" : `Wind ${(w < 0 ? "◀" : "").repeat(arrows)}${(w > 0 ? "▶" : "").repeat(arrows)} ${arrows === 3 ? "strong" : arrows === 2 ? "steady" : "light"}`;
+  let head = "";
+  if (m.phase === "aim") head = i === m.turn ? `Your turn · ${left}` : `${esc(seatName(cur))} is aiming · ${left}`;
+  else if (m.phase === "flight") head = "Incoming!";
+  else if (m.phase === "intro") head = "Get ready";
+  $("turn").innerHTML = m.phase === "over" ? "" : `${head}<small>${windText}${m.turnNo > CONFIG.suddenDeath ? " · water rising" : ""}</small>`;
+  const touch = matchMedia("(pointer: coarse)").matches;
+  const seated = i >= 0;
+  $("left").hidden = $("right").hidden = !(touch && myTurn(m));
+  $("hint").textContent = !seated && m.phase !== "over" ? "You're watching. You get a tank when a bot's tank is free, or next match." :
+    myTurn(m) && (performance.now() - startedAt < 40000 || m.turnNo <= m.seats.length) ? (touch ? `Drag from your tank to aim, the longer the stronger · let go to fire · ◀ ▶ drive${H > W ? " · turn your phone sideways to see more" : ""}` : "Drag to aim and let go to fire · or ↑↓ aim, hold Space for power · ←→ drive") : "";
+  const n = livePlayers().length;
+  $("net").textContent = net.offline ? "Offline: playing with bots" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the match" : ""}`;
+  const showOver = m.phase === "over" && t > m.endsAt - CONFIG.resultsMs + 1800; // the winner's name first, then the card
+  $("over").hidden = !showOver;
+  if (showOver) {
+    $("overTitle").textContent = m.winner === me.id ? "You win!" : m.winner ? `${seatName(m.seats.find((s) => s.id === m.winner) || { name: "Someone" })} wins!` : "It's a draw";
+    $("overSub").textContent = seated ? (m.winner === me.id ? "Last tank standing." : "Blown up. Get them next time.") : "";
+    const ranking = [...m.seats.filter((s) => s.hp > 0).map((s) => s.id), ...[...m.order].reverse()];
+    $("results").innerHTML = ranking.map((id) => { const s = m.seats.find((q) => q.id === id); return s ? `<li class="${id === me.id ? "me" : ""}">${esc(seatName(s))}<span>${s.hp > 0 ? s.hp + " hp" : "out"}</span></li>` : ""; }).join("");
+    $("next").textContent = `Next match in ${Math.max(0, Math.ceil((m.endsAt - t) / 1000))}s`;
+    if (me.shownFor !== m.id) { me.shownFor = m.id; showBoard(m.winner === me.id); }
+  }
+}
+function showBoard(won) {
+  const list = $("board");
+  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li>Loading…</li>";
+  (won ? board.submit(1, "inc").catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li>No wins yet. Be the first.</li>";
+  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+}
+$("again").onclick = () => { if (isHost()) host.again = true; else net.send("again", {}); };
+let audio = null; // made on the first tap or key (browsers block sound before that)
+function sfx(kind) {
+  if (!audio || ATTRACT) return;
+  const [f0, f1, dur, vol, type] = { fire: [180, 60, 0.25, 0.14, "square"], boom: [140, 30, 0.7, 0.18, "sawtooth"], splash: [900, 200, 0.4, 0.05, "triangle"], turn: [520, 880, 0.18, 0.06, "triangle"] }[kind];
+  const t = audio.currentTime, o = audio.createOscillator(), g = audio.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(audio.destination); o.start(t); o.stop(t + dur);
+}
+
+// ── INPUT ───────────────────────────────────────────────────────────────────────────
+// Drag: the arrow from your tank points where you drag, its length is the power; let go to fire.
+const keys = new Set();
+let drag = null;
+addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (["arrowleft", "arrowright", "arrowup", "arrowdown", " "].includes(k)) e.preventDefault();
+  try { audio ||= new AudioContext(); } catch {}
+  keys.add(k);
+  const m = match();
+  if (k === " " && !e.repeat && m && myTurn(m)) { me.charging = true; me.p = 0.05; }
+});
+addEventListener("keyup", (e) => { const k = e.key.toLowerCase(); keys.delete(k); if (k === " " && me.charging) fire(); });
+addEventListener("blur", () => { keys.clear(); me.charging = false; });
+addEventListener("pointerdown", () => { try { audio ||= new AudioContext(); } catch {} }, { once: true });
+function aimAt(px, py) {
+  const m = match(), g = m && shownHills(m), w = toWorld(px, py);
+  if (!g) return;
+  const dx = w.x - me.x, dy = (groundAt(g, me.x) - 18) - w.y;
+  me.a = Math.max(-0.3, Math.min(Math.PI + 0.3, Math.atan2(dy, dx) < -Math.PI / 2 ? Math.atan2(dy, dx) + TAU : Math.atan2(dy, dx)));
+  me.p = Math.max(0.05, Math.min(1, Math.hypot(dx, dy) / 240));
+  drag.on = Math.hypot(dx, dy) > 18;
+}
+cv.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  const m = match();
+  if (!m || !myTurn(m) || drag) return;
+  drag = { id: e.pointerId, on: false, x0: e.clientX, y0: e.clientY, at: performance.now(), moved: false }; cv.setPointerCapture(e.pointerId); aimAt(e.clientX, e.clientY);
+});
+cv.addEventListener("pointermove", (e) => {
+  if (!drag || drag.id !== e.pointerId) return;
+  if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > 10) drag.moved = true;
+  aimAt(e.clientX, e.clientY);
+});
+for (const ev of ["pointerup", "pointercancel"]) cv.addEventListener(ev, (e) => {
+  if (!drag || drag.id !== e.pointerId) return;
+  const go = drag.on && ev === "pointerup" && (drag.moved || performance.now() - drag.at > 300); drag = null; // a quick tap only aims
+  if (go) fire();
+});
+for (const b of [$("left"), $("right")]) {
+  const k = "pad:" + b.id;
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); keys.add(k); b.classList.add("on"); });
+  for (const ev of ["pointerup", "pointercancel"]) b.addEventListener(ev, () => { keys.delete(k); b.classList.remove("on"); });
+}
+document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+
+// ── MAIN LOOP ───────────────────────────────────────────────────────────────────────
+let last = performance.now(), lastHb = 0, lastHud = 0;
+function frame(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now; // the first frame can be stamped before `last`
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
+  if (isHost()) hostTick(now); else host.acting = false;
+  const m = match();
+  if (m) {
+    syncShot(m, now); stepShot(m, now);
+    myTick(dt, m);
+    stepFx(dt);
+    draw(m, now / 1000, dt);
+    if (now - lastHud > 120) { lastHud = now; hud(m); }
+  }
+  requestAnimationFrame(frame);
+}
+
+(async function start() {
+  net = await connect();
+  net.onState((st) => { S = st; });
+  net.on("fire", (msg, from) => { if (host.acting && msg) hostFire(from, msg); });
+  net.on("again", () => { if (host.acting) host.again = true; });
+  net.onDisconnect(() => { $("net").textContent = "Reconnecting…"; });
+  if (!net.offline && typeof MP !== "undefined") board = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }).leaderboard(CONFIG.board);
+  const taken = new Set(Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c));
+  me.id = net.sessionId; me.color = COLORS.find((c) => !taken.has(c)) || COLORS[Math.floor(Math.random() * COLORS.length)];
+  net.me.set({ n: myName, c: me.color, hb: Date.now() });
+  if (ATTRACT) Object.assign(CONFIG, { seats: 4, introMs: 200, settleMs: 500, botThinkMs: 700, hp: 60, resultsMs: 1500, maxDamage: 60 });
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
